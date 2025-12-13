@@ -70,6 +70,20 @@ struct flb_oauth2_jwt_cfg {
     int         jwks_refresh_interval;    /* refresh cadence in seconds */
 };
 
+struct flb_oauth2_jwt_validation_request {
+    const char *token;                    /* raw JWT token */
+    size_t token_length;                  /* JWT length */
+    flb_sds_t issuer;                     /* required issuer */
+    flb_sds_t audience;                   /* required audience */
+    flb_sds_t client_id;                  /* required client id/azp */
+    int64_t current_time;                 /* optional unix time override */
+    int64_t leeway;                       /* optional expiration leeway */
+};
+
+struct flb_oauth2_jwt_validation_response {
+    int status;                           /* validation status */
+};
+
 struct flb_oauth2_jwt_ctx;
 
 /* Allocate and populate a validation context from configuration. */

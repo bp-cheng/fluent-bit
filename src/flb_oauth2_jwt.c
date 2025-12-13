@@ -22,18 +22,36 @@
 #include <fluent-bit/flb_mem.h>
 #include <fluent-bit/flb_time.h>
 #include <fluent-bit/flb_config_map.h>
+#include <fluent-bit/flb_hash_table.h>
 #include <fluent-bit/flb_oauth2_jwt.h>
 #include <fluent-bit/flb_base64.h>
+
+#include <monkey/mk_core/mk_list.h>
 
 #include <ctype.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
 
 #include <jsmn/jsmn.h>
 
 
+struct flb_oauth2_jwks_key {
+    flb_sds_t kid;
+    flb_sds_t modulus;
+    flb_sds_t exponent;
+    time_t loaded_at;
+};
+
+struct flb_oauth2_jwks_cache {
+    struct flb_hash_table *entries;
+    time_t last_refresh;
+    int refresh_interval;
+};
+
 struct flb_oauth2_jwt_ctx {
     struct flb_oauth2_jwt_cfg cfg;
+    struct flb_oauth2_jwks_cache jwks_cache;
 };
 
 const char *flb_oauth2_jwt_status_message(int status)
@@ -74,6 +92,65 @@ const char *flb_oauth2_jwt_status_message(int status)
     default:
         return "unknown error";
     }
+}
+
+static void oauth2_jwks_key_destroy(struct flb_oauth2_jwks_key *key)
+{
+    if (!key) {
+        return;
+    }
+
+    if (key->kid) {
+        flb_sds_destroy(key->kid);
+    }
+
+    if (key->modulus) {
+        flb_sds_destroy(key->modulus);
+    }
+
+    if (key->exponent) {
+        flb_sds_destroy(key->exponent);
+    }
+
+    flb_free(key);
+}
+
+static void oauth2_jwks_cache_destroy(struct flb_oauth2_jwks_cache *cache)
+{
+    struct mk_list *head;
+    struct mk_list *tmp;
+    struct flb_hash_table_entry *entry;
+
+    if (!cache || !cache->entries) {
+        return;
+    }
+
+    mk_list_foreach_safe(head, tmp, &cache->entries->entries) {
+        entry = mk_list_entry(head, struct flb_hash_table_entry, _head);
+
+        oauth2_jwks_key_destroy(entry->val);
+    }
+
+    flb_hash_table_destroy(cache->entries);
+    cache->entries = NULL;
+}
+
+static int oauth2_jwks_cache_init(struct flb_oauth2_jwks_cache *cache,
+                                  int refresh_interval)
+{
+    if (!cache) {
+        return -1;
+    }
+
+    cache->entries = flb_hash_table_create(FLB_HASH_TABLE_EVICT_NONE, 64, 0);
+    if (!cache->entries) {
+        return -1;
+    }
+
+    cache->last_refresh = 0;
+    cache->refresh_interval = refresh_interval;
+
+    return 0;
 }
 
 static void oauth2_jwt_destroy_claims(struct flb_oauth2_jwt_claims *claims)
@@ -514,6 +591,12 @@ struct flb_oauth2_jwt_ctx *flb_oauth2_jwt_context_create(struct flb_oauth2_jwt_c
         memcpy(&ctx->cfg, cfg, sizeof(struct flb_oauth2_jwt_cfg));
     }
 
+    if (oauth2_jwks_cache_init(&ctx->jwks_cache,
+                               ctx->cfg.jwks_refresh_interval) != 0) {
+        flb_free(ctx);
+        return NULL;
+    }
+
     return ctx;
 }
 
@@ -523,6 +606,7 @@ void flb_oauth2_jwt_context_destroy(struct flb_oauth2_jwt_ctx *ctx)
         return;
     }
 
+    oauth2_jwks_cache_destroy(&ctx->jwks_cache);
     oauth2_jwt_free_cfg(&ctx->cfg);
     flb_free(ctx);
 }
