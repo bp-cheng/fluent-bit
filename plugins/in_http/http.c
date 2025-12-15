@@ -88,6 +88,25 @@ static int in_http_init(struct flb_input_instance *ins,
         return -1;
     }
 
+    if (ctx->oauth2_cfg.validate) {
+        if (!ctx->oauth2_cfg.issuer || !ctx->oauth2_cfg.jwks_url) {
+            flb_plg_error(ctx->ins, "oauth2.issuer and oauth2.jwks_url are required when oauth2.validate is enabled");
+            http_config_destroy(ctx);
+            return -1;
+        }
+
+        if (ctx->oauth2_cfg.jwks_refresh_interval <= 0) {
+            ctx->oauth2_cfg.jwks_refresh_interval = 300;
+        }
+
+        ctx->oauth2_ctx = flb_oauth2_jwt_context_create(&ctx->oauth2_cfg);
+        if (!ctx->oauth2_ctx) {
+            flb_plg_error(ctx->ins, "unable to create oauth2 jwt context");
+            http_config_destroy(ctx);
+            return -1;
+        }
+    }
+
     /* Set the context */
     flb_input_set_context(ins, ctx);
 
@@ -235,6 +254,42 @@ static struct flb_config_map config_map[] = {
      FLB_CONFIG_MAP_INT, "successful_response_code", "201",
      0, FLB_TRUE, offsetof(struct flb_http, successful_response_code),
      "Set successful response code. 200, 201 and 204 are supported."
+    },
+
+    {
+     FLB_CONFIG_MAP_BOOL, "oauth2.validate", "false",
+     0, FLB_TRUE, offsetof(struct flb_http, oauth2_cfg.validate),
+     "Enable OAuth2 JWT validation for incoming requests."
+    },
+
+    {
+     FLB_CONFIG_MAP_STR, "oauth2.issuer", NULL,
+     0, FLB_TRUE, offsetof(struct flb_http, oauth2_cfg.issuer),
+     "Expected issuer claim for OAuth2 JWT validation."
+    },
+
+    {
+     FLB_CONFIG_MAP_STR, "oauth2.jwks_url", NULL,
+     0, FLB_TRUE, offsetof(struct flb_http, oauth2_cfg.jwks_url),
+     "JWKS endpoint URL for OAuth2 JWT validation."
+    },
+
+    {
+     FLB_CONFIG_MAP_STR, "oauth2.allowed_audience", NULL,
+     0, FLB_TRUE, offsetof(struct flb_http, oauth2_cfg.allowed_audience),
+     "Audience claim to enforce for OAuth2 JWT validation."
+    },
+
+    {
+     FLB_CONFIG_MAP_SLIST_1, "oauth2.allowed_clients", NULL,
+     FLB_CONFIG_MAP_MULT, FLB_TRUE, offsetof(struct flb_http, oauth2_cfg.allowed_clients),
+     "Authorized client_id/azp values for OAuth2 JWT validation."
+    },
+
+    {
+     FLB_CONFIG_MAP_INT, "oauth2.jwks_refresh_interval", "300",
+     0, FLB_TRUE, offsetof(struct flb_http, oauth2_cfg.jwks_refresh_interval),
+     "JWKS cache refresh interval in seconds for OAuth2 JWT validation."
     },
 
     /* EOF */

@@ -25,6 +25,7 @@
 #include <fluent-bit/flb_hash_table.h>
 #include <fluent-bit/flb_oauth2_jwt.h>
 #include <fluent-bit/flb_base64.h>
+#include <fluent-bit/flb_slist.h>
 
 #include <monkey/mk_core/mk_list.h>
 
@@ -619,6 +620,13 @@ int flb_oauth2_jwt_validate(struct flb_oauth2_jwt_ctx *ctx,
     size_t token_start = 0;
     size_t token_len;
     struct flb_oauth2_jwt jwt;
+    struct mk_list *allowed_client_head;
+    struct flb_slist_entry *allowed_client_entry;
+    int allowed_client_authorized;
+
+    allowed_client_head = NULL;
+    allowed_client_entry = NULL;
+    allowed_client_authorized = FLB_FALSE;
 
     if (!ctx) {
         return FLB_OAUTH2_JWT_ERR_INVALID_ARGUMENT;
@@ -650,16 +658,56 @@ int flb_oauth2_jwt_validate(struct flb_oauth2_jwt_ctx *ctx,
         token_len--;
     }
 
+    memset(&jwt, 0, sizeof(struct flb_oauth2_jwt));
+
     status = flb_oauth2_jwt_parse(&authorization_header[token_start], token_len, &jwt);
     if (status != FLB_OAUTH2_JWT_OK) {
-        flb_warn("[oauth2_jwt] failed to parse token: %s",
-                 flb_oauth2_jwt_status_message(status));
+        flb_debug("[oauth2_jwt] failed to parse token: %s",
+                  flb_oauth2_jwt_status_message(status));
         return status;
     }
 
-    flb_warn("OAuth2 JWT validation requested but not fully implemented yet; rejecting request after parsing");
+    if (jwt.claims.expiration <= (uint64_t) time(NULL)) {
+        status = FLB_OAUTH2_JWT_ERR_INVALID_ARGUMENT;
+        goto jwt_end;
+    }
+
+    if (ctx->cfg.issuer && jwt.claims.issuer &&
+        strcmp(ctx->cfg.issuer, jwt.claims.issuer) != 0) {
+        status = FLB_OAUTH2_JWT_ERR_INVALID_ARGUMENT;
+        goto jwt_end;
+    }
+
+    if (ctx->cfg.allowed_audience && jwt.claims.audience &&
+        strcmp(ctx->cfg.allowed_audience, jwt.claims.audience) != 0) {
+        status = FLB_OAUTH2_JWT_ERR_INVALID_ARGUMENT;
+        goto jwt_end;
+    }
+
+    if (ctx->cfg.allowed_clients && mk_list_size(ctx->cfg.allowed_clients) > 0) {
+        allowed_client_authorized = FLB_FALSE;
+
+        mk_list_foreach(allowed_client_head, ctx->cfg.allowed_clients) {
+            allowed_client_entry = mk_list_entry(allowed_client_head,
+                                                 struct flb_slist_entry, _head);
+            if (jwt.claims.client_id && allowed_client_entry->str &&
+                strcmp(allowed_client_entry->str, jwt.claims.client_id) == 0) {
+                allowed_client_authorized = FLB_TRUE;
+                break;
+            }
+        }
+
+        if (allowed_client_authorized == FLB_FALSE) {
+            status = FLB_OAUTH2_JWT_ERR_INVALID_ARGUMENT;
+            goto jwt_end;
+        }
+    }
+
+    status = FLB_OAUTH2_JWT_OK;
+
+jwt_end:
     flb_oauth2_jwt_destroy(&jwt);
 
-    return FLB_OAUTH2_JWT_ERR_VALIDATION_UNAVAILABLE;
+    return status;
 }
 
